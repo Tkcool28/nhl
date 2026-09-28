@@ -97,27 +97,45 @@ def build(df):
                                   + team_game["team_shots_against_l10"])
     key = team_game[["team", "game_date", "team_shots_for_l10",
                      "team_shots_against_l10", "team_pim_l10", "team_pace_l10"]]
+    n0 = len(df)
     df = df.merge(key, on=["team", "game_date"], how="left")
+    assert len(df) == n0, "team merge duplicated rows"
     oppkey = key.rename(columns={"team": "opp",
                                  "team_shots_for_l10": "opp_shots_for_l10",
                                  "team_shots_against_l10": "opp_shots_against_l10",
                                  "team_pim_l10": "opp_pim_l10",
                                  "team_pace_l10": "opp_pace_l10"})
     df = df.merge(oppkey, on=["opp", "game_date"], how="left")
+    assert len(df) == n0, "opp merge duplicated rows"
 
     # ---- empirical-Bayes shrinkage prior (also the EB baseline) ----
-    # prior season rate shrunk to league mean; first season -> league mean
-    pg = (df.groupby(["player_id", "season"], as_index=False)
+    # prior season rate shrunk to league mean; no prior season ->
+    # prior season's league mean, else frozen training-only mean.
+    # BUGFIX 2026-09-27: league means and the fallback are computed on
+    # TRAINING seasons only. Previously the fallback used the all-seasons
+    # mean, leaking the validation season's own mean into validation rows.
+    df_tr = df[df["season"] <= TRAIN_END]
+    pg = (df_tr.groupby(["player_id", "season"], as_index=False)
             .agg(pg_shots=("shots", "mean"), pg_n=("shots", "size")))
-    league = df.groupby("season")["shots"].mean().to_dict()
+    league = df_tr.groupby("season")["shots"].mean().to_dict()
+    train_mean = float(df_tr["shots"].mean())
+    (OUT / "fallbacks.json").write_text(json.dumps({
+        "train_mean_shots": train_mean,
+        "league_mean_by_season": {str(k): float(v) for k, v in league.items()},
+        "K_SHRINK": K_SHRINK,
+        "note": "frozen at feature-build time; validation must reuse these exact values"}, indent=1))
     pg["league_mean"] = pg["season"].map(league)
     pg["prior_pg"] = ((pg["pg_n"] * pg["pg_shots"] + K_SHRINK * pg["league_mean"])
                       / (pg["pg_n"] + K_SHRINK))
     pg["next_season"] = pg["season"] + 10001  # 20182019 -> 20192020
+    n0 = len(df)
     df = df.merge(pg[["player_id", "next_season", "prior_pg"]],
                   left_on=["player_id", "season"],
                   right_on=["player_id", "next_season"], how="left")
-    df["prior_pg"] = df["prior_pg"].fillna(df["season"].map(league))
+    assert len(df) == n0, "prior_pg merge duplicated rows"
+    fallback = {s: league.get(s - 10001, train_mean) for s in df["season"].unique()}
+    df["prior_pg"] = df["prior_pg"].fillna(df["season"].map(fallback))
+    assert df["prior_pg"].notna().all(), "prior_pg still has NaNs after fallback"
     df.drop(columns=["next_season"], inplace=True)
     # EB prediction: trailing-10 blended with prior
     s10 = trailing_sum(g, "shots", 10)
