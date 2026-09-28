@@ -34,10 +34,10 @@
  "medians": {
   "shots_l5": 1.6,
   "shots_l10": 1.6,
-  "shots_l20": 1.5789473684210527,
-  "shots_per60_l10": 5.968117687546997,
-  "toi_l10": 16.50333333333333,
-  "toi_trend": 0.0016666666666864671,
+  "shots_l20": 1.6,
+  "shots_per60_l10": 5.9891861915985025,
+  "toi_l10": 16.53333333333333,
+  "toi_trend": 0.0,
   "pp_share_l10": 0.0,
   "shots_home_l10": 1.6,
   "shots_road_l10": 1.5,
@@ -45,7 +45,7 @@
   "opp_shots_against_l10": 31.0,
   "opp_pim_l10": 8.1,
   "team_shots_for_l10": 31.0,
-  "team_pace_l10": 62.0,
+  "team_pace_l10": 62.099999999999994,
   "rest_days": 2.0,
   "b2b": 0.0,
   "home": 1.0,
@@ -65,7 +65,7 @@
     "alpha_hi": 0.05
    },
    "2.5": {
-    "alpha_lo": 0.02,
+    "alpha_lo": 0.05,
     "alpha_hi": 0.05
    },
    "3.5": {
@@ -74,7 +74,7 @@
    },
    "4.5": {
     "alpha_lo": 0.02,
-    "alpha_hi": 0.05
+    "alpha_hi": 0.02
    }
   },
   "eb": {
@@ -95,8 +95,8 @@
     "alpha_hi": 0.2
    }
   },
-  "naive_l10": 0.29552186081773485,
-  "ridge2stage": 0.2962640945977276
+  "naive_l10": 0.2921933264272385,
+  "ridge2stage": 0.29382294985326524
  },
  "model": "residual-target GBM: mu = eb_pred + GBM(shots - eb_pred)",
  "version": "v1",

@@ -22,49 +22,64 @@ def p_over_split(mu, a_lo, a_hi, line):
     return out
 
 def clean_mu(mu, df):
-    s = pd.Series(np.asarray(mu, dtype=float))
+    # 2026-09-28: index s like df so the prior_pg fill aligns by row
+    # (see src/model.py -- the old RangeIndex misaligned on slices).
+    s = pd.Series(np.asarray(mu, dtype=float), index=df.index)
     return np.clip(s.fillna(df["prior_pg"].fillna(TRAIN_MEAN)).values, 0.05, None)
 
-tr = pd.read_parquet("data/processed/train.parquet")
-d_fit = tr[tr["season"] <= 20222023].copy()
-d_23 = tr[tr["season"] == 20232024].copy()
-cfg = json.load(open("models/v1/config.json"))
-med = pd.Series(cfg["medians"])
-F = cfg["features"]
+def stage_a_medians(d_fit, cols):
+    """Imputation medians for Stage A tuning: from the fit population
+    (<=2022-23) ONLY. 2026-09-28 correctness fix: the old code read medians
+    from the previous config.json (full-train medians), so the 2023-24
+    selection frame contributed its own imputation statistics."""
+    return d_fit[cols].median()
 
-from sklearn.ensemble import HistGradientBoostingRegressor
-Xf = d_fit[F].fillna(med[F]); yf = d_fit["shots"].values
-eb_f = clean_mu(d_fit["eb_pred"].values, d_fit)
-X23 = d_23[F].fillna(med[F]); y23 = d_23["shots"].values
-eb_23 = clean_mu(d_23["eb_pred"].values, d_23)
-gbm = HistGradientBoostingRegressor(loss="squared_error", max_iter=300,
-                                    learning_rate=0.05, early_stopping=True,
-                                    random_state=7).fit(Xf, yf - eb_f)
-mu23 = clean_mu(eb_23 + gbm.predict(X23), d_23)
 
-tuned = {}
-eb_tuned = {}
-for L in LINES:
-    Y = (y23 > L).astype(int)
-    best = (None, None, 1e9)
-    beste = (None, None, 1e9)
-    for a_lo in GRID:
-        for a_hi in GRID:
-            p = np.clip(p_over_split(mu23, a_lo, a_hi, L), 1e-6, 1 - 1e-6)
-            b = brier_score_loss(Y, p)
-            if b < best[2]:
-                best = (a_lo, a_hi, b)
-            pe = np.clip(p_over_split(eb_23, a_lo, a_hi, L), 1e-6, 1 - 1e-6)
-            be = brier_score_loss(Y, pe)
-            if be < beste[2]:
-                beste = (a_lo, a_hi, be)
-    tuned[str(L)] = {"alpha_lo": best[0], "alpha_hi": best[1]}
-    eb_tuned[str(L)] = {"alpha_lo": beste[0], "alpha_hi": beste[1]}
-    print(f"line {L}: gbm lo={best[0]} hi={best[1]} brier={best[2]:.4f} | "
-          f"eb lo={beste[0]} hi={beste[1]} brier={beste[2]:.4f}")
+def main():
+    tr = pd.read_parquet("data/processed/train.parquet")
+    d_fit = tr[tr["season"] <= 20222023].copy()
+    d_23 = tr[tr["season"] == 20232024].copy()
+    cfg = json.load(open("models/v1/config.json"))
+    F = cfg["features"]
+    med = stage_a_medians(d_fit, F)
 
-t = json.load(open("models/v1/alpha_tune.json"))
-t["alpha_split"] = tuned
-t["alpha_split_eb"] = eb_tuned
-json.dump(t, open("models/v1/alpha_tune.json", "w"), indent=1)
-print("updated models/v1/alpha_tune.json")
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    Xf = d_fit[F].fillna(med[F]); yf = d_fit["shots"].values
+    eb_f = clean_mu(d_fit["eb_pred"].values, d_fit)
+    X23 = d_23[F].fillna(med[F]); y23 = d_23["shots"].values
+    eb_23 = clean_mu(d_23["eb_pred"].values, d_23)
+    gbm = HistGradientBoostingRegressor(loss="squared_error", max_iter=300,
+                                        learning_rate=0.05, early_stopping=True,
+                                        random_state=7).fit(Xf, yf - eb_f)
+    mu23 = clean_mu(eb_23 + gbm.predict(X23), d_23)
+
+    tuned = {}
+    eb_tuned = {}
+    for L in LINES:
+        Y = (y23 > L).astype(int)
+        best = (None, None, 1e9)
+        beste = (None, None, 1e9)
+        for a_lo in GRID:
+            for a_hi in GRID:
+                p = np.clip(p_over_split(mu23, a_lo, a_hi, L), 1e-6, 1 - 1e-6)
+                b = brier_score_loss(Y, p)
+                if b < best[2]:
+                    best = (a_lo, a_hi, b)
+                pe = np.clip(p_over_split(eb_23, a_lo, a_hi, L), 1e-6, 1 - 1e-6)
+                be = brier_score_loss(Y, pe)
+                if be < beste[2]:
+                    beste = (a_lo, a_hi, be)
+        tuned[str(L)] = {"alpha_lo": best[0], "alpha_hi": best[1]}
+        eb_tuned[str(L)] = {"alpha_lo": beste[0], "alpha_hi": beste[1]}
+        print(f"line {L}: gbm lo={best[0]} hi={best[1]} brier={best[2]:.4f} | "
+              f"eb lo={beste[0]} hi={beste[1]} brier={beste[2]:.4f}")
+
+    t = json.load(open("models/v1/alpha_tune.json"))
+    t["alpha_split"] = tuned
+    t["alpha_split_eb"] = eb_tuned
+    json.dump(t, open("models/v1/alpha_tune.json", "w"), indent=1)
+    print("updated models/v1/alpha_tune.json")
+
+
+if __name__ == "__main__":
+    main()

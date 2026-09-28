@@ -18,7 +18,7 @@
    "alpha_hi": 0.05
   },
   "2.5": {
-   "alpha_lo": 0.02,
+   "alpha_lo": 0.05,
    "alpha_hi": 0.05
   },
   "3.5": {
@@ -27,7 +27,7 @@
   },
   "4.5": {
    "alpha_lo": 0.02,
-   "alpha_hi": 0.05
+   "alpha_hi": 0.02
   }
  },
  "alpha_split_eb": {

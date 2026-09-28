@@ -36,6 +36,19 @@ TOI_FEATURES = ["toi_l10", "toi_trend", "rest_days", "b2b", "home", "month",
                 "opp_pim_l10", "team_pace_l10", "n_trailing"]
 ALL_COLS = list(dict.fromkeys(FEATURES + TOI_FEATURES))
 
+def stage_a_medians(tr):
+    """Imputation medians for Stage A (fit <=2022-23, select on 2023-24).
+
+    2026-09-28 correctness fix: computed from the Stage A fit population
+    ONLY. The old code used medians over the full train frame, so the
+    2023-24 selection frame contributed its own imputation statistics."""
+    return tr[tr["season"] <= 20222023][ALL_COLS].median()
+
+def stage_b_medians(tr):
+    """Imputation medians for Stage B (final fit <=2023-24, validate 2024-25):
+    the full allowed training population."""
+    return tr[ALL_COLS].median()
+
 def load():
     tr = pd.read_parquet(PROC / "train.parquet")
     va = pd.read_parquet(PROC / "valid.parquet")
@@ -46,7 +59,11 @@ def load():
 def clean_mu(mu, df):
     # safety-net fill uses the FROZEN training mean only -- never a mean
     # computed over the frame being scored (bugfix 2026-09-27).
-    s = pd.Series(np.asarray(mu, dtype=float))
+    # 2026-09-28: s is indexed like df so the prior_pg fill aligns by row.
+    # (The old RangeIndex silently misaligned whenever df was a slice,
+    # leaving NaNs -- masked before because leakage kept NaN eb_pred rare
+    # and clustered at the frame start where the indices coincided.)
+    s = pd.Series(np.asarray(mu, dtype=float), index=df.index)
     return np.clip(s.fillna(df["prior_pg"].fillna(TRAIN_MEAN)).values, 0.05, None)
 
 ALPHA_SPLIT_MU = 3.0  # mu threshold for dispersion split (round 3)
@@ -142,9 +159,10 @@ def fit_residual_gbm(Xf, yf, eb_f):
 def main():
     ART.mkdir(parents=True, exist_ok=True)
     tr, va = load()
-    med = tr[ALL_COLS].median()
+    med_a = stage_a_medians(tr)
+    med_b = stage_b_medians(tr)
 
-    def frame(df):
+    def frame(df, med):
         X = df[FEATURES].fillna(med[FEATURES])
         eb = clean_mu(df["eb_pred"].values, df)
         return X, df["shots"].values, eb
@@ -153,8 +171,8 @@ def main():
     # (split-alpha values come from src/tune_alpha_split.py, run beforehand)
     d_fit = tr[tr["season"] <= 20222023]
     d_23 = tr[tr["season"] == 20232024]
-    Xf, yf, eb_f = frame(d_fit)
-    X23, y23, eb_23 = frame(d_23)
+    Xf, yf, eb_f = frame(d_fit, med_a)
+    X23, y23, eb_23 = frame(d_23, med_a)
     gbm_a = fit_residual_gbm(Xf, yf, eb_f)
     mu_23 = clean_mu(eb_23 + gbm_a.predict(X23), d_23)
     tune = json.load(open(ART / "alpha_tune.json"))
@@ -167,15 +185,15 @@ def main():
           f"EB brier={brier_score_loss(Y, Pe):.4f}", flush=True)
 
     # ---- stage B: final fit on all train, validate on 24-25 ----
-    Xtr, ytr, eb_tr = frame(tr)
-    Xva, yva, eb_va = frame(va)
+    Xtr, ytr, eb_tr = frame(tr, med_b)
+    Xva, yva, eb_va = frame(va, med_b)
     gbm = fit_residual_gbm(Xtr, ytr, eb_tr)
     mu_main = clean_mu(eb_va + gbm.predict(Xva), va)
 
     # two-stage ridge reference (unchanged)
-    Ttr = tr[TOI_FEATURES].fillna(med[TOI_FEATURES])
-    Tva = va[TOI_FEATURES].fillna(med[TOI_FEATURES])
-    ridge_toi = Ridge(alpha=1.0).fit(Ttr, tr["toi"].fillna(med["toi_l10"]).values)
+    Ttr = tr[TOI_FEATURES].fillna(med_b[TOI_FEATURES])
+    Tva = va[TOI_FEATURES].fillna(med_b[TOI_FEATURES])
+    ridge_toi = Ridge(alpha=1.0).fit(Ttr, tr["toi"].fillna(med_b["toi_l10"]).values)
     pred_toi = np.clip(ridge_toi.predict(Tva), 1, None)
     s60 = Xva["shots_per60_l10"].fillna(tr["shots"].sum() / tr["toi"].sum() * 60)
     mu_ridge2 = clean_mu(pred_toi / 60 * s60.values, va)
@@ -190,7 +208,7 @@ def main():
     ytr_s = tr["shots"].values
     for tag in ("naive_l10", "ridge2stage"):
         mu_tr = clean_mu(tr["naive_l10"].values if tag == "naive_l10"
-                         else np.clip(Ridge(alpha=1.0).fit(Ttr, tr["toi"].fillna(med["toi_l10"]).values)
+                         else np.clip(Ridge(alpha=1.0).fit(Ttr, tr["toi"].fillna(med_b["toi_l10"]).values)
                                       .predict(Ttr).clip(1) / 60 *
                                       Xtr["shots_per60_l10"].fillna(
                                           tr["shots"].sum() / tr["toi"].sum() * 60).values, 0.05, None), tr)
@@ -258,7 +276,7 @@ def main():
         pickle.dump(ridge_toi, f)
     (ART / "config.json").write_text(json.dumps({
         "features": FEATURES, "toi_features": TOI_FEATURES,
-        "medians": med.to_dict(), "lines": LINES,
+        "medians": med_b.to_dict(), "lines": LINES,
         "alpha": {t: (alphas[t] if isinstance(alphas[t], dict) else float(alphas[t]))
                   for t in alphas},
         "model": "residual-target GBM: mu = eb_pred + GBM(shots - eb_pred)",

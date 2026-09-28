@@ -32,9 +32,15 @@ def season_of_game(gid: int) -> int:
 
 
 def get(url, tries=6):
+    import random
     for i in range(tries):
-        r = requests.get(url, timeout=30,
-                         headers={"User-Agent": "nhl-sog-research/1.0"})
+        try:
+            r = requests.get(url, timeout=30,
+                             headers={"User-Agent": "nhl-sog-research/1.0"})
+        except requests.exceptions.RequestException:
+            # transient network failure (timeout, proxy, reset): backoff+retry
+            time.sleep(2 ** i + random.random())
+            continue
         if r.status_code == 200:
             return r.json()
         if r.status_code in (429, 500, 502, 503):

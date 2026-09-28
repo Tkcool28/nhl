@@ -1,7 +1,11 @@
 """Phase 2: feature engineering. Strict prior-games-only construction.
 
 Every rolling feature uses games strictly before the current game_date
-(shift(1)), reset at season boundaries. 2025-26 is refused outright.
+(shift(1)), scoped to the entity (player or team). Player history
+intentionally carries across season boundaries -- grouping is by
+player_id only, never (player_id, season) -- so opening night uses
+prior-season history instead of starting veterans from zero.
+2025-26 is refused outright.
 """
 import json
 from pathlib import Path
@@ -45,30 +49,44 @@ def load():
     df["game_date"] = pd.to_datetime(df["game_date"])
     return df.sort_values(["player_id", "game_date"]).reset_index(drop=True)
 
-def trailing(g, col, n):
-    return g[col].shift(1).rolling(n, min_periods=1).mean()
+def trailing(gb_col, n):
+    """Entity-scoped trailing mean: the whole shift+rolling operation stays
+    inside the group.
 
-def trailing_sum(g, col, n):
-    return g[col].shift(1).rolling(n, min_periods=1).sum()
+    2026-09-28 correctness fix: the old form, g[col].shift(1).rolling(n),
+    ran .rolling() on the flattened player-sorted frame, so the end of
+    Player A's history leaked into the start of Player B (and Team A into
+    Team B) -- genuine temporal leakage. .transform() keeps the window
+    inside each entity. Cross-season carryover is intentional: the group
+    key is player_id only."""
+    return gb_col.transform(lambda s: s.shift(1).rolling(n, min_periods=1).mean())
+
+def trailing_sum(gb_col, n):
+    """Entity-scoped trailing sum (see trailing)."""
+    return gb_col.transform(lambda s: s.shift(1).rolling(n, min_periods=1).sum())
+
+def trailing_count(gb_col, n):
+    """Entity-scoped trailing count of non-null shifted values (see trailing)."""
+    return gb_col.transform(lambda s: s.shift(1).rolling(n, min_periods=1).count())
 
 def build(df):
     g = df.groupby("player_id", group_keys=False)
     df["n_trailing"] = g.cumcount()  # games before this one
     for n in (5, 10, 20):
-        df[f"shots_l{n}"] = trailing(g, "shots", n)
-    df["toi_l10"] = trailing(g, "toi", 10)
-    df["toi_trend"] = trailing(g, "toi", 5) - trailing(g, "toi", 10)
-    s_sum = trailing_sum(g, "shots", 10)
-    t_sum = trailing_sum(g, "toi", 10)
+        df[f"shots_l{n}"] = trailing(g["shots"], n)
+    df["toi_l10"] = trailing(g["toi"], 10)
+    df["toi_trend"] = trailing(g["toi"], 5) - trailing(g["toi"], 10)
+    s_sum = trailing_sum(g["shots"], 10)
+    t_sum = trailing_sum(g["toi"], 10)
     df["shots_per60_l10"] = s_sum / t_sum.replace(0, np.nan) * 60
-    pp = trailing_sum(g, "pp_points", 10)
-    pts = trailing_sum(g, "points", 10)
+    pp = trailing_sum(g["pp_points"], 10)
+    pts = trailing_sum(g["points"], 10)
     df["pp_share_l10"] = pp / pts.replace(0, np.nan)
     # home/road splits: trailing means within venue type (vectorized)
     df["_h_shots"] = np.where(df["home"] == 1, df["shots"], np.nan)
     df["_r_shots"] = np.where(df["home"] == 0, df["shots"], np.nan)
-    df["shots_home_l10"] = g["_h_shots"].shift(1).rolling(10, min_periods=1).mean()
-    df["shots_road_l10"] = g["_r_shots"].shift(1).rolling(10, min_periods=1).mean()
+    df["shots_home_l10"] = trailing(g["_h_shots"], 10)
+    df["shots_road_l10"] = trailing(g["_r_shots"], 10)
     df.drop(columns=["_h_shots", "_r_shots"], inplace=True)
     # rest / back-to-back
     df["rest_days"] = g["game_date"].diff().dt.days
@@ -90,9 +108,9 @@ def build(df):
     team_game = m[["team", "game_date", "shots_for", "shots_against", "pim_for"]].copy()
     team_game = team_game.sort_values(["team", "game_date"])
     tg2 = team_game.groupby("team", group_keys=False)
-    team_game["team_shots_for_l10"] = tg2["shots_for"].shift(1).rolling(10, min_periods=1).mean()
-    team_game["team_shots_against_l10"] = tg2["shots_against"].shift(1).rolling(10, min_periods=1).mean()
-    team_game["team_pim_l10"] = tg2["pim_for"].shift(1).rolling(10, min_periods=1).mean()
+    team_game["team_shots_for_l10"] = trailing(tg2["shots_for"], 10)
+    team_game["team_shots_against_l10"] = trailing(tg2["shots_against"], 10)
+    team_game["team_pim_l10"] = trailing(tg2["pim_for"], 10)
     team_game["team_pace_l10"] = (team_game["team_shots_for_l10"]
                                   + team_game["team_shots_against_l10"])
     key = team_game[["team", "game_date", "team_shots_for_l10",
@@ -138,10 +156,10 @@ def build(df):
     assert df["prior_pg"].notna().all(), "prior_pg still has NaNs after fallback"
     df.drop(columns=["next_season"], inplace=True)
     # EB prediction: trailing-10 blended with prior
-    s10 = trailing_sum(g, "shots", 10)
-    n10 = g["shots"].shift(1).rolling(10, min_periods=1).count()
+    s10 = trailing_sum(g["shots"], 10)
+    n10 = trailing_count(g["shots"], 10)
     df["eb_pred"] = (s10 + K_SHRINK * df["prior_pg"]) / (n10 + K_SHRINK)
-    df["naive_l10"] = trailing(g, "shots", 10)
+    df["naive_l10"] = trailing(g["shots"], 10)
     return df
 
 def main():
