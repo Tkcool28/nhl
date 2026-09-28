@@ -10,6 +10,8 @@ import pickle
 LINES = [1.5, 2.5, 3.5, 4.5]
 GRID = [0.02, 0.05, 0.1, 0.2, 0.3]
 SPLIT = 3.0
+# frozen training-only fallback (bugfix 2026-09-27: never a frame-local mean)
+TRAIN_MEAN = float(json.load(open("data/processed/fallbacks.json"))["train_mean_shots"])
 
 def p_over_split(mu, a_lo, a_hi, line):
     mu = np.clip(mu, 0.05, None)
@@ -21,7 +23,7 @@ def p_over_split(mu, a_lo, a_hi, line):
 
 def clean_mu(mu, df):
     s = pd.Series(np.asarray(mu, dtype=float))
-    return np.clip(s.fillna(df["prior_pg"].fillna(df["prior_pg"].mean())).values, 0.05, None)
+    return np.clip(s.fillna(df["prior_pg"].fillna(TRAIN_MEAN)).values, 0.05, None)
 
 tr = pd.read_parquet("data/processed/train.parquet")
 d_fit = tr[tr["season"] <= 20222023].copy()
