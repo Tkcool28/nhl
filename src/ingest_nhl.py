@@ -1,9 +1,11 @@
 """Phase 1: pull raw NHL API data. Train 2018-19..2023-24, validate 2024-25.
 
 HARD GUARD: 2025-26 (the sealed holdout) is never requested. Any attempt raises.
+Threaded (8 workers) with per-worker rate politeness; resumable via file skip.
 """
-import json, time, sys
+import json, time, sys, threading
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import requests
 
 WEB = "https://api-web.nhle.com/v1"
@@ -17,16 +19,24 @@ ALL_SEASONS = TRAIN_SEASONS + [VALID_SEASON]
 assert SEALED_HOLDOUT not in ALL_SEASONS, "holdout season must never be pulled"
 
 RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
-S = requests.Session()
-S.headers.update({"User-Agent": "nhl-sog-research/1.0"})
 
 def guard_season(season: int):
     if season == SEALED_HOLDOUT:
         raise RuntimeError("REFUSED: 2025-26 is the sealed holdout")
 
+_local = threading.local()
+
+def session():
+    if not hasattr(_local, "s"):
+        s = requests.Session()
+        s.headers.update({"User-Agent": "nhl-sog-research/1.0"})
+        _local.s = s
+    return _local.s
+
 def get(url, tries=4):
+    s = session()
     for i in range(tries):
-        r = S.get(url, timeout=30)
+        r = s.get(url, timeout=30)
         if r.status_code == 200:
             return r.json()
         if r.status_code in (429, 500, 502, 503):
@@ -82,6 +92,7 @@ def game_log(pid: int, season: int):
 def main():
     RAW.mkdir(parents=True, exist_ok=True)
     manifest = {}
+    lock = threading.Lock()
     for season in ALL_SEASONS:
         guard_season(season)
         sdir = RAW / "game_logs" / str(season)
@@ -89,23 +100,27 @@ def main():
         players = skater_ids(season)
         manifest[str(season)] = {"n_players": len(players)}
         print(f"season {season}: {len(players)} skaters", flush=True)
-        done = 0
-        for p in players:
+        todo = [p for p in players if not (sdir / f"{p['playerId']}.json").exists()]
+        print(f"  {len(todo)} remaining (skipping cached)", flush=True)
+        done = [0]
+
+        def fetch(p):
             fp = sdir / f"{p['playerId']}.json"
-            if fp.exists():
-                done += 1
-                continue
             try:
                 rows = game_log(p["playerId"], season)
             except Exception as e:
-                print(f"  WARN {p['playerId']}: {e}", flush=True)
-                continue
+                with lock:
+                    print(f"  WARN {p['playerId']}: {e}", flush=True)
+                return
             fp.write_text(json.dumps({"meta": p, "games": rows}))
-            done += 1
-            if done % 100 == 0:
-                print(f"  {season}: {done}/{len(players)}", flush=True)
-            time.sleep(0.12)
-        print(f"season {season} complete: {done} logs", flush=True)
+            with lock:
+                done[0] += 1
+                if done[0] % 200 == 0:
+                    print(f"  {season}: {done[0]}/{len(todo)}", flush=True)
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(fetch, todo))
+        print(f"season {season} complete", flush=True)
     (RAW / "manifest.json").write_text(json.dumps(manifest, indent=1))
     print("ingest complete", flush=True)
 
