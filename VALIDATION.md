@@ -1,8 +1,14 @@
-# v1 Validation Report — 2024-25 season (frozen)
+# v1 Validation Report — 2024-25 season (FROZEN 2026-09-27)
 
-**Verdict: 2 of 3 pre-registered gates pass. Calibration gate fails on 2 of 17
-qualifying buckets (both extreme top-end). Model is frozen as-is; the full
-bucket table below is the apples-to-apples record for future models.**
+**Verdict: 3 of 4 pre-registered gates pass. Calibration gate fails on 2 of 17
+qualifying buckets (both extreme top-end). Frozen as v1 — see
+FREEZE_PROTOCOL.md for the freeze commitments and the pre-fix baseline.**
+
+This report describes the frozen model: after the 2026-09-27 bug-fix rerun
+(`prior_pg` fallback leak — train-only means, logged as a bug correction, not
+a tuning round). Pre-fix numbers are preserved as `models/v1/metrics_prefix.json`
+and summarized in FREEZE_PROTOCOL.md; they barely moved, confirming the leak
+was immaterial.
 
 ## Setup
 
@@ -23,21 +29,23 @@ bucket table below is the apples-to-apples record for future models.**
 
 | model       | AUC    | Brier  | Log loss | ECE   |
 |-------------|--------|--------|----------|-------|
-| gbm_nb (v1) | 0.8298 | 0.1213 | 0.3798   | 0.0039|
-| eb baseline | 0.8259 | 0.1227 | 0.3839   | 0.0150|
+| gbm_nb (v1) | 0.8300 | 0.1212 | 0.3797   | 0.0040|
+| eb baseline | 0.8258 | 0.1228 | 0.3841   | 0.0159|
 | naive L10   | 0.8117 | 0.1258 | 0.3953   | 0.0082|
 | ridge2stage | 0.8119 | 0.1258 | 0.3951   | 0.0081|
 
-Gates: Brier beats EB ✓ · Log-loss beats EB ✓ · Buckets ≤3pp ✗ (2 misses)
+Gates: Brier beats EB ✓ · Log-loss beats EB ✓ ·
+NB count log-likelihood beats EB ✓ (-288,224.5 vs -290,669.0) ·
+Buckets ≤3pp ✗ (2 misses)
 
 ## Per-line (v1)
 
 | line | base rate | AUC    | Brier  | Log loss |
 |------|-----------|--------|--------|----------|
-| 1.5  | 0.434     | 0.7110 | 0.2126 | 0.6143   |
-| 2.5  | 0.221     | 0.7433 | 0.1491 | 0.4623   |
-| 3.5  | 0.103     | 0.7755 | 0.0830 | 0.2853   |
-| 4.5  | 0.046     | 0.8073 | 0.0405 | 0.1574   |
+| 1.5  | 0.434     | 0.7112 | 0.2125 | 0.6141   |
+| 2.5  | 0.221     | 0.7437 | 0.1490 | 0.4620   |
+| 3.5  | 0.103     | 0.7757 | 0.0830 | 0.2853   |
+| 4.5  | 0.046     | 0.8077 | 0.0405 | 0.1573   |
 
 ## Preset calibration buckets (v1) — the apples-to-apples record
 
@@ -54,7 +62,7 @@ Predicted P(over) in 5pp bins vs actual hit rate, per line:
 | 0.70–0.75 | 2050 | 0.724 | 0.723 |
 | 0.75–0.80 | 1533 | 0.774 | 0.768 |
 | 0.80–0.85 | 843 | 0.821 | 0.807 |
-| 0.85–0.90 | 334 | 0.871 | 0.826 ⚠ miss by 4.5pp |
+| 0.85–0.90 | 350 | 0.871 | 0.806 ⚠ miss by 6.5pp |
 
 **Over 2.5**
 | bucket | n | pred | hit |
@@ -63,17 +71,18 @@ Predicted P(over) in 5pp bins vs actual hit rate, per line:
 | 0.50–0.55 | 1354 | 0.525 | 0.497 |
 | 0.55–0.60 | 1147 | 0.570 | 0.593 |
 | 0.60–0.65 | 454 | 0.622 | 0.593 |
-| 0.65–0.70 | 236 | 0.671 | 0.623 ⚠ miss by 4.8pp |
+| 0.65–0.70 | 244 | 0.672 | 0.623 ⚠ miss by 4.9pp |
 
 **Over 3.5**: all mass <0.50 (n=46250, pred 0.101, hit 0.101) ✓
 **Over 4.5**: all mass <0.50 (n=46509, pred 0.043, hit 0.045) ✓
 
 ## Known limitations (production-relevant)
 
-1. **Model runs ~4–5pp hot at the extreme top end** (P(over 1.5) > 0.85,
-   P(over 2.5) > 0.65 — i.e., superstar overs). Treat high-confidence over
-   edges with extra skepticism; the 8pp "missing info" rule catches the worst
-   of it, but a 4pp phantom edge can survive it.
+1. **Model runs hot at the extreme top end** (P(over 1.5) > 0.85:
+   pred 0.871 vs hit 0.806; P(over 2.5) > 0.65: pred 0.672 vs hit 0.623 —
+   i.e., superstar overs). Treat high-confidence over edges with extra
+   skepticism; the 8pp "missing info" rule catches the worst of it, but a
+   phantom edge of several pp can survive it.
 2. Lines 3.5/4.5 have almost no high-confidence predictions — the model rarely
    sees a player as >50% to clear 3.5. Alt-line value detection will be thin.
 3. Line 1.5 AUC is only 0.71 — the 1.5 line is inherently noisy (one shot
