@@ -5,7 +5,9 @@ prior: mu = eb_pred + GBM_resid(features). This forces shrinkage structure and
 fixes the top-end mu bias diagnosed in round 1 (GBM-poisson overpredicted
 stars: mean mu 3.33 vs actual 3.15 in the top bucket).
 Count distribution: negative binomial head -> P(over/under) per line.
-Adjustment rounds used: 2 of <=3 (round1: per-line alpha; round2: residual target).
+Adjustment rounds used: 3 of <=3 (round1: per-line alpha; round2: residual
+target; round3: mu-split alpha). 2026-09-27: bug-fix rerun (prior_pg fallback
+leak) logged in FREEZE_PROTOCOL.md -- not a tuning round.
 """
 import json, pickle
 from pathlib import Path
@@ -21,6 +23,8 @@ ART = Path(__file__).resolve().parent.parent / "models" / "v1"
 SEALED = 20252026
 LINES = [1.5, 2.5, 3.5, 4.5]
 ALPHAS = [0.02, 0.05, 0.08, 0.1, 0.15, 0.2, 0.3]
+# frozen training-only fallback (written by features.py; never recomputed here)
+TRAIN_MEAN = float(json.load(open(PROC / "fallbacks.json"))["train_mean_shots"])
 
 FEATURES = ["shots_l5", "shots_l10", "shots_l20", "shots_per60_l10",
             "toi_l10", "toi_trend", "pp_share_l10",
@@ -40,8 +44,10 @@ def load():
     return tr, va
 
 def clean_mu(mu, df):
+    # safety-net fill uses the FROZEN training mean only -- never a mean
+    # computed over the frame being scored (bugfix 2026-09-27).
     s = pd.Series(np.asarray(mu, dtype=float))
-    return np.clip(s.fillna(df["prior_pg"].fillna(df["prior_pg"].mean())).values, 0.05, None)
+    return np.clip(s.fillna(df["prior_pg"].fillna(TRAIN_MEAN)).values, 0.05, None)
 
 ALPHA_SPLIT_MU = 3.0  # mu threshold for dispersion split (round 3)
 
@@ -56,6 +62,22 @@ def p_over(mu, alpha, line):
         return out
     n, p = 1.0 / alpha, 1.0 / (1.0 + alpha * mu)
     return nbinom.sf(int(np.floor(line)), n, p)
+
+def alpha_for_mu(mu, alpha):
+    """Per-row alpha: split dict -> alpha_lo/hi at ALPHA_SPLIT_MU, else scalar."""
+    mu = np.asarray(mu, dtype=float)
+    if isinstance(alpha, dict) and "alpha_lo" in alpha:
+        return np.where(mu <= ALPHA_SPLIT_MU, alpha["alpha_lo"], alpha["alpha_hi"])
+    return np.full_like(mu, float(alpha))
+
+def nb_count_loglik(y, mu, alpha):
+    """Sum of NB log-pmf at observed counts (pre-registered gate 3)."""
+    mu = np.clip(np.asarray(mu, dtype=float), 0.05, None)
+    a = alpha_for_mu(mu, alpha)
+    n, p = 1.0 / a, 1.0 / (1.0 + a * mu)
+    return float(np.sum(nbinom.logpmf(np.asarray(y, dtype=int),
+                                      np.maximum(n, 1e-9),
+                                      np.clip(p, 1e-9, 1 - 1e-9))))
 
 def tune_alpha_per_line(df, mu):
     y = df["shots"].values
@@ -200,9 +222,34 @@ def main():
             if bk["n"] >= 200 and abs(bk["pred"] - bk["hit"]) > 0.03:
                 cal_ok = False
     gates["calibration_3pp"] = cal_ok
+    # pre-registered gate 3: NB count log-likelihood beats baseline.
+    # v1 note: alphas are per-line, so LL is summed over the four line-heads
+    # (each row scored once per head); both models get identical treatment.
+    yva_s = va["shots"].values
+    ll_gbm = sum(nb_count_loglik(yva_s, mu_main, alpha_gbm[str(L)]) for L in LINES)
+    ll_eb = sum(nb_count_loglik(yva_s, eb_va, alpha_eb[str(L)]) for L in LINES)
+    report["nb_count_loglik"] = {"gbm_nb": ll_gbm, "eb": ll_eb}
+    gates["nb_ll_beats_eb"] = ll_gbm > ll_eb
+    print(f"NB count loglik: gbm_nb={ll_gbm:.1f} eb={ll_eb:.1f}", flush=True)
     report["gates"] = {k: bool(v) for k, v in gates.items()}
     report["results"] = results
     print("GATES:", json.dumps(report["gates"]), flush=True)
+
+    # row-level validation predictions (audit trail; hash at freeze)
+    pred_rows = pd.DataFrame({
+        "player_id": va["player_id"].values, "game_id": va["game_id"].values,
+        "game_date": va["game_date"].dt.strftime("%Y-%m-%d"),
+        "season": va["season"].values, "team": va["team"].values,
+        "opp": va["opp"].values, "home": va["home"].values, "pos": va["pos"].values,
+        "shots": yva_s, "n_trailing": va["n_trailing"].values,
+        "mu_gbm": mu_main, "mu_eb": np.asarray(eb_va, dtype=float)})
+    for L in LINES:
+        pred_rows[f"p_over_{L}"] = p_over(mu_main, alpha_gbm[str(L)], L)
+        pred_rows[f"p_over_eb_{L}"] = p_over(np.asarray(eb_va, dtype=float),
+                                            alpha_eb[str(L)], L)
+    pred_rows.to_parquet(ART / "valid_predictions.parquet", index=False)
+    print(f"row-level predictions: {len(pred_rows):,} rows -> valid_predictions.parquet",
+          flush=True)
 
     (ART / "metrics.json").write_text(json.dumps(report, indent=1))
     with open(ART / "gbm.pkl", "wb") as f:
