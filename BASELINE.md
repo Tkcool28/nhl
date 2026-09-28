@@ -64,6 +64,15 @@ zero-missing boxscore gate (`src/reconcile_boxscores.py`, exit 0 required).
 
 ## Holdout status
 
-2025-26 remains sealed. Opening it is a separate milestone using the
-already-frozen model, preprocessing, eligibility rule, evaluation contract,
-diagnostic buckets, and hypotheses defined here.
+2025-26 was opened 2026-09-28 as its own milestone (authorized by Terry),
+using the already-frozen model, preprocessing, eligibility rule,
+evaluation contract, diagnostic buckets, and hypotheses. Run script:
+`src/holdout_open.py` (frozen scripts untouched). Results:
+`holdout/report_2025_26.json`; full prediction log:
+`holdout/predictions_2025_26.jsonl` (regenerable from
+`data/processed/holdout_2025_26.parquet` via `src/predict.py`).
+Headline: gates 3/4 on both slices (calibration failing, as on
+validation); Brier 0.1217 all-skater / 0.1336 eligible, beating EB on both;
+high-end overconfidence did NOT persist — holdout showed under-confidence
+through mid-high P(over) instead (see H7 in `HYPOTHESES.md`). No
+definitions were changed after seeing these results.
