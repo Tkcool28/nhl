@@ -1,0 +1,104 @@
+{
+ "features": [
+  "shots_l5",
+  "shots_l10",
+  "shots_l20",
+  "shots_per60_l10",
+  "toi_l10",
+  "toi_trend",
+  "pp_share_l10",
+  "shots_home_l10",
+  "shots_road_l10",
+  "n_trailing",
+  "opp_shots_against_l10",
+  "opp_pim_l10",
+  "team_shots_for_l10",
+  "team_pace_l10",
+  "rest_days",
+  "b2b",
+  "home",
+  "month",
+  "prior_pg"
+ ],
+ "toi_features": [
+  "toi_l10",
+  "toi_trend",
+  "rest_days",
+  "b2b",
+  "home",
+  "month",
+  "opp_pim_l10",
+  "team_pace_l10",
+  "n_trailing"
+ ],
+ "medians": {
+  "shots_l5": 1.6,
+  "shots_l10": 1.6,
+  "shots_l20": 1.55,
+  "shots_per60_l10": 5.9676750932449245,
+  "toi_l10": 16.475,
+  "toi_trend": 0.001666666666675809,
+  "pp_share_l10": 0.0,
+  "shots_home_l10": 1.6,
+  "shots_road_l10": 1.5,
+  "n_trailing": 127.0,
+  "opp_shots_against_l10": 30.3,
+  "opp_pim_l10": 7.9,
+  "team_shots_for_l10": 30.333333333333332,
+  "team_pace_l10": 60.699999999999996,
+  "rest_days": 2.0,
+  "b2b": 0.0,
+  "home": 0.0,
+  "month": 4.0,
+  "prior_pg": 1.7226323652373083
+ },
+ "lines": [
+  1.5,
+  2.5,
+  3.5,
+  4.5
+ ],
+ "alpha": {
+  "gbm_nb": {
+   "1.5": {
+    "alpha_lo": 0.05,
+    "alpha_hi": 0.05
+   },
+   "2.5": {
+    "alpha_lo": 0.05,
+    "alpha_hi": 0.1
+   },
+   "3.5": {
+    "alpha_lo": 0.05,
+    "alpha_hi": 0.1
+   },
+   "4.5": {
+    "alpha_lo": 0.02,
+    "alpha_hi": 0.05
+   }
+  },
+  "eb": {
+   "1.5": {
+    "alpha_lo": 0.1,
+    "alpha_hi": 0.02
+   },
+   "2.5": {
+    "alpha_lo": 0.02,
+    "alpha_hi": 0.02
+   },
+   "3.5": {
+    "alpha_lo": 0.02,
+    "alpha_hi": 0.02
+   },
+   "4.5": {
+    "alpha_lo": 0.05,
+    "alpha_hi": 0.1
+   }
+  },
+  "naive_l10": 0.2960474943030482,
+  "ridge2stage": 0.2967508580587069
+ },
+ "model": "residual-target GBM: mu = eb_pred + GBM(shots - eb_pred)",
+ "version": "v1",
+ "frozen": true
+}
