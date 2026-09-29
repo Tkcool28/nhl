@@ -58,7 +58,7 @@ function vSlate() {
   }
   const byGame = {};
   SLATE.players.forEach(p => { (byGame[p.game_id] = byGame[p.game_id] || []).push(p); });
-  let h = `<div class="dim" style="margin-bottom:6px">${SLATE.slate_date} · ${SLATE.players.length} eligible skaters · model v1.2</div>`;
+  let h = `<div class="dim" style="margin-bottom:6px">${SLATE.slate_date} · ${SLATE.players.length} eligible skaters · model v1.2 · μ = model's expected shots</div>`;
   Object.entries(byGame).forEach(([gid, ps]) => {
     ps.sort((a, b) => b.mu_gbm - a.mu_gbm);
     h += `<div class="game-head">${ps[0].matchup || ""}</div>`;
@@ -108,7 +108,17 @@ function renderSheet() {
       ${flags.length ? `<div style="margin-top:6px">${flags.map(f => `<span class="flag">${f}</span>`).join("")}</div>` : ""}
       <div class="note" style="margin-top:6px">v1.2 runs slightly hot at low P(over) and cool in the 0.55–0.80 band (2025-26 holdout). Treat mid-range edges as measured, not gospel.</div>
     </div>
-    <div class="card"><div class="dim">BOOK ODDS → CHECK THE SPOT</div>
+    <div class="card"><div class="dim">QUICK CHECK — DK STYLE</div>
+      <div class="dim" style="margin:2px 0 6px">Pick the "N+" market, type the book price, compare to the model.</div>
+      <div class="linebtns" id="qlines">${[["2+", 1.5], ["3+", 2.5], ["4+", 3.5], ["5+", 4.5]].map(([lbl, x]) =>
+        `<button data-l="${x}" class="${x === 2.5 ? "active" : ""}">${lbl}</button>`).join("")}</div>
+      <label>Book price on <span id="qlbl">3+</span> (e.g. -120)</label>
+      <input type="number" id="qodds" placeholder="-120">
+      <div id="qout"><div class="note">Type the price to see the model's number for it.</div></div>
+      <button class="btn btn-log" id="qlog">📝 Log this line</button>
+      <div class="note" style="margin-top:6px">Single-price check: edge is vs the raw book price. Books bake vig into it, so the true no-vig edge runs a touch higher than shown.</div>
+    </div>
+    <div class="card"><div class="dim">BOOK ODDS → CHECK THE SPOT (both sides, de-vigged)</div>
       <div class="row" style="gap:8px">
         <div style="flex:1"><label>Over ${L}</label><input type="number" id="bo" placeholder="-110"></div>
         <div style="flex:1"><label>Under ${L}</label><input type="number" id="bu" placeholder="-110"></div>
@@ -136,6 +146,62 @@ function renderSheet() {
   };
   $("#bo").oninput = upd; $("#bu").oninput = upd; upd();
   $("#logline").onclick = () => logLine(p, L, mp, fairO);
+
+  /* ---- DK-style quick check: single "N+" price vs model ---- */
+  let qline = 2.5;
+  const qkey = () => String(qline).replace(".", "_");
+  const qlbl = () => ({1.5: "2+", 2.5: "3+", 3.5: "4+", 4.5: "5+"})[qline];
+  const qupd = () => {
+    const mp = p["p_over_" + qkey()], fairO = p["fair_odds_over_" + qkey()];
+    $("#qlbl").textContent = qlbl();
+    const o = $("#qout"), price = parseFloat($("#qodds").value), io = imp(price);
+    if (!isFinite(io)) {
+      o.innerHTML = `<div class="note">Type the price to see the model's number for it.</div>`;
+      o.dataset.calc = ""; return;
+    }
+    const edge = (mp - io) * 100;
+    const win = price > 0 ? price : 10000 / -price;
+    const ev = mp * win - (1 - mp) * 100;
+    const good = edge > 0;
+    o.innerHTML = `
+      <div class="kv"><span>Model P(${qlbl()} shots)</span><b class="glow">${(mp * 100).toFixed(1)}%</b></div>
+      <div class="kv"><span>Model fair price</span><b>${fmtOdds(fairO)}</b></div>
+      <div class="kv"><span>Book ${fmtOdds(price)} implies</span><b>${(io * 100).toFixed(1)}%</b></div>
+      <div class="kv"><span>Model − book edge</span><b style="color:${edge >= 0 ? "var(--good)" : "var(--bad)"}">${edge >= 0 ? "+" : ""}${edge.toFixed(1)}pp</b></div>
+      <div class="verdict ${good ? "good" : "bad"}">${good ? "✓ VALUE" : "✕ NO EDGE"} · EV ${ev >= 0 ? "+" : ""}${ev.toFixed(1)} / $100</div>`;
+    o.dataset.calc = JSON.stringify({mp, fairO, price, io, edge, ev});
+  };
+  b.querySelectorAll("#qlines button").forEach(x =>
+    x.onclick = () => {
+      b.querySelectorAll("#qlines button").forEach(y => y.classList.remove("active"));
+      x.classList.add("active"); qline = parseFloat(x.dataset.l); qupd();
+    });
+  $("#qodds").oninput = qupd;
+  $("#qlog").onclick = () => {
+    const c = JSON.parse($("#qout").dataset.calc || "null");
+    if (!c) { alert("Type the book price first."); return; }
+    const obs = {
+      observation_id: uid(),
+      observed_at: new Date().toISOString(),
+      run_id: SLATE.run_id || ("slate-" + SLATE.slate_date),
+      slate_date: SLATE.slate_date,
+      game_id: p.game_id, player_id: p.player_id, player_name: p.player_name,
+      team: p.team, opp: p.opp, home_away: p.home_away, position: p.position,
+      line: qline, market_label: qlbl(),
+      over_price: c.price, under_price: null,
+      imp_over: +c.io.toFixed(4), imp_under: null,
+      devig_over: null, devig_under: null,
+      model_p_over: +c.mp.toFixed(4), model_fair_over: c.fairO,
+      edge_pp: +c.edge.toFixed(2),
+      edge_direction: c.edge >= 0 ? "model_over" : "model_under",
+      edge_basis: "raw_implied_single_side",
+      ev_per_100: +c.ev.toFixed(1),
+      baseline_version: "v1.2", eligible: true, synced: false,
+    };
+    const log = getLog(); log.push(obs); saveLog(log);
+    syncLog();
+    alert(`Logged: ${p.player_name} ${qlbl()} @ ${fmtOdds(c.price)} (edge ${c.edge >= 0 ? "+" : ""}${c.edge.toFixed(1)}pp vs raw price)`);
+  };
 }
 
 function drawDist(p, L, alpha) {

@@ -166,6 +166,29 @@ def todays_games(date_str):
     return games
 
 
+TEAMS_32 = ["ANA", "BOS", "BUF", "CAR", "CBJ", "CGY", "CHI", "COL",
+           "DAL", "DET", "EDM", "FLA", "LAK", "MIN", "MTL", "NJD",
+           "NSH", "NYI", "NYR", "OTT", "PHI", "PIT", "SEA", "SJS",
+           "STL", "TBL", "TOR", "UTA", "VAN", "VGK", "WPG", "WSH"]
+
+
+def current_teams():
+    """pid -> team from today's official rosters (trades/call-ups).
+    Fail-closed: returns {} on any error, keeping historical teams."""
+    out = {}
+    try:
+        for t in TEAMS_32:
+            d = ing.get(f"{ing.WEB}/roster/{t}/current")
+            for grp in ("forwards", "defensemen"):
+                for pl in d.get(grp, []):
+                    out[int(pl["id"])] = t
+    except Exception as e:
+        print(f"roster override failed ({str(e)[:80]}); using historical teams",
+              flush=True)
+        return {}
+    return out
+
+
 def frozen_build(df):
     """Run the frozen features.build() with fallbacks.json snapshot/restore."""
     fb_path = feat.OUT / "fallbacks.json"
@@ -187,7 +210,11 @@ def build_slate(date_str, games, df):
               .set_index("player_id"))
     # only players active in the current or prior season -- no ghosts whose
     # old team happens to play today
-    latest = latest[latest["season"] >= SEASON - 10001]
+    latest = latest[latest["season"] >= SEASON - 10001].copy()
+    # current-team override from official rosters (offseason trades etc.)
+    for pid, team in current_teams().items():
+        if pid in latest.index:
+            latest.at[pid, "team"] = team
     gid_map = {}
     for g in games:
         gid_map[g["home"]] = (g["game_id"], g["away"], 1)
