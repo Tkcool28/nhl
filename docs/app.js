@@ -231,12 +231,17 @@ async function syncLog() {
 function vLog() {
   const el = $("#view"), log = getLog().slice().reverse();
   const s = settings();
-  el.innerHTML = `<div class="card"><div class="row">
-      <div><div class="big">${log.length} logged</div>
+  const nPred = SLATE && SLATE.players ? SLATE.players.length : 0;
+  el.innerHTML = `<div class="card"><div class="big">📝 Auto-log</div>
+    <div class="dim">Every skater on today's dash is prediction-logged automatically — no taps needed.
+    <b style="color:var(--ice)">${nPred} predictions</b> for ${SLATE ? SLATE.slate_date : "—"} are in the repo's immutable log
+    (<span style="font-family:monospace">data/market_log/predictions_*.jsonl</span>).</div></div>
+  <div class="card"><div class="row">
+      <div><div class="big">${log.length} market snapshots</div>
       <div class="dim">${log.filter(o => o.synced).length} synced to GitHub${s.pat ? "" : " · <b>no PAT set</b> — logging locally only"}</div></div>
       <button class="btn-ghost btn" style="width:auto;margin:0" id="syncbtn">↻ Sync</button></div>
     <div style="margin-top:8px" class="row"><button class="btn-ghost btn" style="margin:0" id="exp">⬇ Export JSON</button></div>
-    <div class="note" style="margin-top:8px">Every evaluated line gets logged — winners and losers. Sync writes append-only JSONL to <span style="font-family:monospace">data/market_log/</span> in the repo; the morning job auto-joins results.</div></div>
+    <div class="note" style="margin-top:8px">Book-odds snapshots still need one tap when you check a spot — only you see your book's prices. Sync writes append-only JSONL to <span style="font-family:monospace">data/market_log/</span>; the morning job auto-joins results.</div></div>
     ${log.map(o => `<div class="logrow"><span class="pill ${o.synced ? "sync" : "pend"}">${o.synced ? "synced" : "pending"}</span>
       <b>${o.player_name}</b> o${o.line} @ ${o.over_price > 0 ? "+" : ""}${o.over_price}
       <span class="dim">edge ${o.edge_pp >= 0 ? "+" : ""}${o.edge_pp}pp ${o.edge_direction === "model_over" ? "▲" : "▼"} · EV ${o.ev_per_100 >= 0 ? "+" : ""}${o.ev_per_100}/$100 · ${o.slate_date}</span></div>`).join("") || `<div class="dim">Nothing logged yet.</div>`}`;

@@ -153,13 +153,16 @@ def load_all_seasons():
 def todays_games(date_str):
     d = ing.get(f"{ing.WEB}/scoreboard/{date_str}")
     games = []
-    for g in d.get("games", []):
-        if g.get("gameType") != 2:
+    for day in d.get("gamesByDate", []):
+        if day.get("date") != date_str:
             continue
-        games.append({"game_id": g["id"],
-                      "home": g["homeTeam"]["abbrev"],
-                      "away": g["awayTeam"]["abbrev"],
-                      "date": g["gameDate"][:10]})
+        for g in day.get("games", []):
+            if g.get("gameType") != 2:
+                continue
+            games.append({"game_id": g["id"],
+                          "home": g["homeTeam"]["abbrev"],
+                          "away": g["awayTeam"]["abbrev"],
+                          "date": g["gameDate"][:10]})
     return games
 
 
@@ -216,20 +219,25 @@ def score_placeholders(full, date_str):
     mask = (built["season"] == SEASON) & (built["game_date"] == date_str)
     slate = built[mask].copy().reset_index(drop=True)
     assert len(slate) > 0
+    # Canonical immutable prediction log (MARKET_LOGGING.md): one record per
+    # player-game, every skater on the dash, no clicks required.
+    log_dir = REPO / "data" / "market_log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"predictions_{date_str}.jsonl"
     tmp_in = Path(f"/tmp/slate_{date_str}.parquet")
-    tmp_out = Path(f"/tmp/slate_{date_str}.jsonl")
-    if tmp_out.exists():
-        tmp_out.unlink()
     slate.to_parquet(tmp_in, index=False)
-    r = subprocess.run(
-        [sys.executable, str(REPO / "src" / "predict.py"),
-         "--input", str(tmp_in), "--out", str(tmp_out),
-         "--run-id", f"slate-{date_str}"],
-        capture_output=True, text=True, cwd=REPO)
-    if r.returncode != 0:
-        print(r.stderr)
-        sys.exit(1)
-    preds = pd.read_json(tmp_out, lines=True)
+    if not log_path.exists():
+        r = subprocess.run(
+            [sys.executable, str(REPO / "src" / "predict.py"),
+             "--input", str(tmp_in), "--out", str(log_path),
+             "--run-id", f"slate-{date_str}"],
+            capture_output=True, text=True, cwd=REPO)
+        if r.returncode != 0:
+            print(r.stderr)
+            sys.exit(1)
+    else:
+        print(f"prediction log exists, reusing {log_path}", flush=True)
+    preds = pd.read_json(log_path, lines=True)
     return preds
 
 
@@ -306,7 +314,7 @@ def main():
             preds = preds[preds["eligible"]].reset_index(drop=True)
             game_by_id = {g["game_id"]: g for g in games}
             for _, r in preds.iterrows():
-                rec = r.to_dict()
+                rec = json.loads(json.dumps(r.to_dict(), default=str))
                 rec["alpha"] = alpha
                 g = game_by_id.get(rec["game_id"], {})
                 rec["matchup"] = f"{g.get('away', '?')} @ {g.get('home', '?')}"
