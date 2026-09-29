@@ -22,8 +22,10 @@ main{padding:12px 12px 40px}
 .dim{color:var(--dim); font-size:12px}
 .big{font-size:22px; font-weight:800}
 .row{display:flex; justify-content:space-between; align-items:center; gap:8px}
-.game-head{font-weight:800; font-size:13px; color:var(--ice); margin:14px 2px 8px;
+.game{margin:6px 0 34px; padding-bottom:22px; border-bottom:1px solid #1c2a3a}
+.game-head{font-weight:800; font-size:21px; color:var(--ice); margin:2px 2px 10px;
   letter-spacing:.5px}
+.team-head{font-weight:700; font-size:17px; color:#fff; margin:16px 2px 8px}
 .prow{display:flex; justify-content:space-between; align-items:center;
   background:var(--card); border:1px solid var(--line); border-radius:12px;
   padding:10px 12px; margin-bottom:6px; width:100%; color:var(--txt);

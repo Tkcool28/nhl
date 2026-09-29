@@ -56,20 +56,25 @@ function vSlate() {
       <div class="dim">${SLATE.note || ""}<br>Slate date: ${SLATE.slate_date}</div></div>`;
     return;
   }
-  const byGame = {};
-  SLATE.players.forEach(p => { (byGame[p.game_id] = byGame[p.game_id] || []).push(p); });
+  const byMu = (a, b) => b.mu_gbm - a.mu_gbm;
   let h = `<div class="dim" style="margin-bottom:6px">${SLATE.slate_date} · ${SLATE.players.length} eligible skaters · model v1.2 · μ = model's expected shots</div>`;
-  Object.entries(byGame).forEach(([gid, ps]) => {
-    ps.sort((a, b) => b.mu_gbm - a.mu_gbm);
-    h += `<div class="game-head">${ps[0].matchup || ""}</div>`;
-    ps.forEach(p => {
-      h += `<button class="prow" data-pid="${p.player_id}">
-        <span><span class="nm">${p.player_name}</span><br><span class="tm">${p.team} · ${p.position} · TOI ${p.toi_l10.toFixed(1)}</span></span>
-        <span style="text-align:right"><span class="mu">μ ${p.mu_gbm.toFixed(2)}</span><br>
-        <span class="tm">o2.5 ${fmtOdds(p.fair_odds_over_2_5)} · ${(p.p_over_2_5 * 100).toFixed(0)}%</span></span>
-      </button>`;
-    });
-  });
+  const row = p => `<button class="prow" data-pid="${p.player_id}">
+      <span><span class="nm">${p.player_name}</span><br><span class="tm">${p.team} · ${p.position} · TOI ${p.toi_l10.toFixed(1)}</span></span>
+      <span style="text-align:right"><span class="mu">μ ${p.mu_gbm.toFixed(2)}</span><br>
+      <span class="tm">o2.5 ${fmtOdds(p.fair_odds_over_2_5)} · ${(p.p_over_2_5 * 100).toFixed(0)}%</span></span>
+    </button>`;
+  for (const g of SLATE.games) {
+    const away = SLATE.players.filter(p => p.game_id === g.game_id && p.team === g.away).sort(byMu);
+    const home = SLATE.players.filter(p => p.game_id === g.game_id && p.team === g.home).sort(byMu);
+    if (!away.length && !home.length) continue;
+    h += `<div class="game"><div class="game-head">${g.away} @ ${g.home}</div>`;
+    for (const [tname, tlist] of [[g.away, away], [g.home, home]]) {
+      if (!tlist.length) continue;
+      h += `<div class="team-head">${tname} <span class="dim">· ${tlist.length} skaters</span></div>`;
+      tlist.forEach(p => { h += row(p); });
+    }
+    h += `</div>`;
+  }
   el.innerHTML = h;
   el.querySelectorAll(".prow").forEach(b =>
     b.onclick = () => openPlayer(parseInt(b.dataset.pid)));
