@@ -90,6 +90,19 @@ def refresh_ingest():
         for fp in SEASON_DIR.glob("*.json"):
             pid = int(fp.stem)
             by_id.setdefault(pid, {"playerId": pid, "name": "?", "pos": "?"})
+    # Cover every player we've ever predicted: the bulk summary endpoint can
+    # miss skaters, and settle_predictions() needs actuals for all of them.
+    log_dir = REPO / "data" / "market_log"
+    if log_dir.exists():
+        for pfp in sorted(log_dir.glob("predictions_*.jsonl")):
+            for line in pfp.read_text().splitlines():
+                if not line.strip():
+                    continue
+                o = json.loads(line)
+                by_id.setdefault(o["player_id"],
+                                 {"playerId": o["player_id"],
+                                  "name": o["player_name"],
+                                  "pos": o.get("position", "?")})
     players = [by_id[k] for k in sorted(by_id)]
     print(f"refreshing {len(players)} skaters for {SEASON}", flush=True)
     failures, done = [], [0]
@@ -311,6 +324,71 @@ def settle_logs():
         print(f"settled {n} observations", flush=True)
 
 
+PRED_LINES = [1.5, 2.5, 3.5, 4.5]
+
+
+def settle_predictions():
+    """Grade every logged prediction against final actuals.
+
+    Unlike settle_logs() (which only covers market observations Terry taps
+    in), this settles ALL prediction records automatically: for each
+    player-game whose box score is final, record actual SOG, per-line
+    hit/miss, and Brier score. Idempotent: already-settled
+    (game_date, game_id, player_id) keys are skipped.
+    """
+    log_dir = REPO / "data" / "market_log"
+    if not log_dir.exists():
+        return
+    actual = {}
+    for sdir in sorted((ing.RAW / "game_logs").iterdir()):
+        for fp in sdir.glob("*.json"):
+            pid = int(fp.stem)
+            for g in json.loads(fp.read_text()).get("games", []):
+                actual[(g["gameId"], pid)] = g["shots"]
+    settled_path = log_dir / "prediction_settlements.jsonl"
+    done = set()
+    if settled_path.exists():
+        for line in settled_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            o = json.loads(line)
+            done.add((o["game_date"], o["game_id"], o["player_id"]))
+    n = 0
+    with open(settled_path, "a") as f:
+        for fp in sorted(log_dir.glob("predictions_*.jsonl")):
+            for line in fp.read_text().splitlines():
+                if not line.strip():
+                    continue
+                p = json.loads(line)
+                key = (p["game_date"], p["game_id"], p["player_id"])
+                if key in done:
+                    continue
+                akey = (p["game_id"], p["player_id"])
+                if akey not in actual:
+                    continue  # game not final yet
+                sog = actual[akey]
+                rec = {
+                    "game_date": p["game_date"], "game_id": p["game_id"],
+                    "player_id": p["player_id"], "player_name": p["player_name"],
+                    "team": p["team"], "opp": p["opp"],
+                    "eligible": p.get("eligible"),
+                    "mu_gbm": p["mu_gbm"], "toi_l10": p.get("toi_l10"),
+                    "actual_sog": sog,
+                    "settled_at": datetime.now(timezone.utc).isoformat(),
+                }
+                for L in PRED_LINES:
+                    pk = f"p_over_{str(L).replace('.', '_')}"
+                    prob = p[pk]
+                    hit = 1 if sog > L else 0
+                    rec[f"hit_{str(L).replace('.', '_')}"] = hit
+                    rec[pk] = prob
+                    rec[f"brier_{str(L).replace('.', '_')}"] = round((prob - hit) ** 2, 6)
+                f.write(json.dumps(rec) + "\n")
+                n += 1
+    if n:
+        print(f"settled {n} predictions", flush=True)
+
+
 # -------------------------------------------------------------------- main
 def main():
     ap_date = sys.argv[sys.argv.index("--date") + 1] if "--date" in sys.argv else None
@@ -356,6 +434,7 @@ def main():
     (DOCS_DATA / "latest.json").write_text(json.dumps(slate))
     print(f"wrote {out}", flush=True)
     settle_logs()
+    settle_predictions()
 
 
 if __name__ == "__main__":
